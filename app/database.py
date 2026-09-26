@@ -335,6 +335,89 @@ CREATE TABLE IF NOT EXISTS dossier_events (
     occurred_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dossier_events_dossier ON dossier_events(dossier_id, id);
+
+CREATE TABLE IF NOT EXISTS disclosure_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_code TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS disclosure_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES disclosure_projects(id),
+    version_no INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('draft','submitted')),
+    based_on_version_id INTEGER REFERENCES disclosure_versions(id),
+    manifest_json TEXT,
+    manifest_digest TEXT,
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    submitted_by INTEGER REFERENCES users(id),
+    submitted_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(project_id, version_no)
+);
+CREATE INDEX IF NOT EXISTS idx_disclosure_versions_project ON disclosure_versions(project_id, version_no);
+
+CREATE TABLE IF NOT EXISTS disclosure_submission_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    version_id INTEGER NOT NULL REFERENCES disclosure_versions(id),
+    batch_seq INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    received_by INTEGER NOT NULL REFERENCES users(id),
+    received_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(version_id, batch_seq)
+);
+
+CREATE TABLE IF NOT EXISTS disclosure_carriers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES disclosure_projects(id),
+    carrier_kind TEXT NOT NULL,
+    content_digest TEXT NOT NULL,
+    digest_algorithm TEXT NOT NULL DEFAULT 'sha256',
+    content_size INTEGER NOT NULL CHECK(content_size > 0),
+    content_blob BLOB NOT NULL,
+    media_type TEXT NOT NULL DEFAULT '',
+    first_file_name TEXT NOT NULL,
+    first_submitted_by INTEGER NOT NULL REFERENCES users(id),
+    first_submitted_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(project_id, content_digest)
+);
+
+CREATE TABLE IF NOT EXISTS disclosure_carrier_memberships (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    version_id INTEGER NOT NULL REFERENCES disclosure_versions(id),
+    carrier_id INTEGER NOT NULL REFERENCES disclosure_carriers(id),
+    batch_id INTEGER NOT NULL REFERENCES disclosure_submission_batches(id),
+    sequence_no INTEGER NOT NULL,
+    file_name TEXT NOT NULL,
+    inclusion_type TEXT NOT NULL DEFAULT 'received' CHECK(inclusion_type IN ('received','snapshot')),
+    submitted_by INTEGER NOT NULL REFERENCES users(id),
+    submitted_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(version_id, carrier_id),
+    UNIQUE(version_id, sequence_no)
+);
+CREATE INDEX IF NOT EXISTS idx_disclosure_memberships_version ON disclosure_carrier_memberships(version_id, sequence_no);
+
+CREATE TABLE IF NOT EXISTS disclosure_package_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES disclosure_projects(id),
+    version_id INTEGER REFERENCES disclosure_versions(id),
+    carrier_id INTEGER REFERENCES disclosure_carriers(id),
+    event_type TEXT NOT NULL,
+    actor_user_id INTEGER REFERENCES users(id),
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_disclosure_events_version ON disclosure_package_events(version_id, id);
+CREATE INDEX IF NOT EXISTS idx_disclosure_events_project ON disclosure_package_events(project_id, id);
 """
 
 PERMISSIONS = [
@@ -353,6 +436,9 @@ PERMISSIONS = [
     ("approvals.decide", "审批高风险操作", "approvals", "decide"),
     ("vaults.read_sensitive", "查看精确密级库位", "vaults", "read_sensitive"),
     ("incidents.manage", "管理泄密事件", "incidents", "manage"),
+    ("disclosure_packages.read", "查看交底包版本", "disclosure_package", "read"),
+    ("disclosure_packages.write", "登记交底包材料", "disclosure_package", "write"),
+    ("disclosure_packages.submit", "送审交底包版本", "disclosure_package", "submit"),
 ]
 
 
@@ -432,10 +518,11 @@ def init_db() -> None:
             "dossier_manager": [
                 "dossiers.read", "dossiers.write", "dossiers.disclose", "dossiers.dispose",
                 "access_loans.manage", "inventory_review.manage", "incidents.manage",
+                "disclosure_packages.read", "disclosure_packages.write", "disclosure_packages.submit",
             ],
-            "researcher": ["dossiers.read", "dossiers.disclose"],
-            "approver": ["dossiers.read", "approvals.decide"],
-            "auditor": ["dossiers.read", "audit.read"],
+            "researcher": ["dossiers.read", "dossiers.disclose", "disclosure_packages.read", "disclosure_packages.write"],
+            "approver": ["dossiers.read", "approvals.decide", "disclosure_packages.read"],
+            "auditor": ["dossiers.read", "audit.read", "disclosure_packages.read"],
         }
         for role_code, permission_codes in role_permissions.items():
             role_id = connection.execute("SELECT id FROM roles WHERE code=?", (role_code,)).fetchone()[0]
