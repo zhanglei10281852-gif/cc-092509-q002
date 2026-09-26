@@ -335,6 +335,60 @@ CREATE TABLE IF NOT EXISTS dossier_events (
     occurred_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_dossier_events_dossier ON dossier_events(dossier_id, id);
+
+CREATE TABLE IF NOT EXISTS invention_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_code TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    owner_department TEXT NOT NULL,
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS disclosure_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES invention_projects(id),
+    version_no INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'draft' CHECK(state IN ('draft','submitted')),
+    version_digest TEXT,
+    submitted_by INTEGER REFERENCES users(id),
+    submitted_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(project_id, version_no)
+);
+CREATE INDEX IF NOT EXISTS idx_disclosure_versions_project ON disclosure_versions(project_id, version_no);
+
+CREATE TABLE IF NOT EXISTS disclosure_carriers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES invention_projects(id),
+    carrier_kind TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    media_type TEXT NOT NULL DEFAULT '',
+    size_bytes INTEGER NOT NULL DEFAULT 0 CHECK(size_bytes >= 0),
+    digest_algorithm TEXT NOT NULL DEFAULT 'sha256',
+    content_digest TEXT NOT NULL,
+    first_batch_code TEXT NOT NULL,
+    uploaded_by INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    UNIQUE(project_id, content_digest)
+);
+
+CREATE TABLE IF NOT EXISTS disclosure_version_carriers (
+    version_id INTEGER NOT NULL REFERENCES disclosure_versions(id) ON DELETE CASCADE,
+    carrier_id INTEGER NOT NULL REFERENCES disclosure_carriers(id),
+    project_id INTEGER NOT NULL REFERENCES invention_projects(id),
+    sequence_no INTEGER NOT NULL,
+    batch_code TEXT NOT NULL,
+    first_version_no INTEGER NOT NULL,
+    added_by INTEGER NOT NULL REFERENCES users(id),
+    added_at TEXT NOT NULL,
+    PRIMARY KEY(version_id, carrier_id),
+    UNIQUE(version_id, sequence_no)
+);
+CREATE INDEX IF NOT EXISTS idx_version_carriers_carrier ON disclosure_version_carriers(carrier_id);
+CREATE INDEX IF NOT EXISTS idx_version_carriers_project_sequence ON disclosure_version_carriers(project_id, sequence_no);
 """
 
 PERMISSIONS = [
@@ -353,6 +407,7 @@ PERMISSIONS = [
     ("approvals.decide", "审批高风险操作", "approvals", "decide"),
     ("vaults.read_sensitive", "查看精确密级库位", "vaults", "read_sensitive"),
     ("incidents.manage", "管理泄密事件", "incidents", "manage"),
+    ("disclosure_packages.manage", "管理发明交底包登记", "disclosure_package", "manage"),
 ]
 
 
@@ -432,6 +487,7 @@ def init_db() -> None:
             "dossier_manager": [
                 "dossiers.read", "dossiers.write", "dossiers.disclose", "dossiers.dispose",
                 "access_loans.manage", "inventory_review.manage", "incidents.manage",
+                "disclosure_packages.manage",
             ],
             "researcher": ["dossiers.read", "dossiers.disclose"],
             "approver": ["dossiers.read", "approvals.decide"],
